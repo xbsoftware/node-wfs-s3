@@ -1,0 +1,9 @@
+kind: pipeline
+name: default
+
+steps:
+- name: test
+  image: node:10
+  commands:
+  - yarn install
+  - yarn test
