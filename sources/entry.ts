@@ -1,4 +1,5 @@
 import * as policies from "./policy";
 import {Operation} from "./types";
+import S3 from "./S3";
 
-export {policies, Operation};
+export {S3, policies, Operation};
