@@ -73,7 +73,7 @@ await fs.write("some.txt", stream)
 // ForceRoot policy is added automatically
 
 // readonly
-const wfs = require("wfs-local");
+const wfs = require("wfs-s3");
 const fs = new wfs.S3("s3://temp-files/some/", new wfs.policies.ReadOnlyPolicy());
 
 // custom
@@ -92,7 +92,7 @@ const fs = new wfs.S3("s3://temp-files/some/", {
 
 ```js
 //logging
-const wfs = require("wfs-local");
+const wfs = require("wfs-s3");
 const fs = new wfs.S3("s3://temp-files/some/", null, { verbose: true });
 ```
 

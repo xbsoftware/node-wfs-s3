@@ -3,7 +3,6 @@ import { expect } from "chai";
 import "mocha";
 
 import S3 from "./S3";
-import { ForceRootPolicy } from "./policy";
 
 
 async function strToStr(stream){
@@ -31,7 +30,15 @@ let drive : S3;
 let driveSub : S3;
 describe("S3", () => {
 	beforeEach(async () => {
+		drive = new S3("s3://mk-wfs-test/", null, {
+			accessKey: "AKIA5TKYKU54ULIHYRGP",
+			secretKey: ""
+		});
 
+		driveSub = new S3("s3://mk-wfs-test/sub/", null, {
+			accessKey: "AKIA5TKYKU54ULIHYRGP",
+			secretKey: ""
+		});
 	});
 
 	describe("exists", () => {
@@ -56,6 +63,26 @@ describe("S3", () => {
 		});
 	});
 
+	describe("mkdir", () => {
+		it("Can create a folder", async () => {
+			await drive.mkdir("/alfa/123/a");
+
+			const check = await drive.exists("/alfa/123/a");
+			expect(check).to.eq(true);
+
+			await drive.remove("/alfa");
+		});
+
+		it("Can create and rename a folder (if exists)", async () => {
+			await drive.mkdir("/sub/deep", {preventNameCollision:true});
+
+			const check = await drive.exists("/sub/deep(1)");
+			expect(check).to.eq(true);
+
+			await drive.remove("/sub/deep(1)");
+		});
+	});
+
 	describe("copy", () => {
 		it("Can copy a file", async () => {
 			const path = "/sub/deep/copy.doc";
@@ -66,115 +93,76 @@ describe("S3", () => {
 			expect(check).to.eq(true);
 			await drive.remove(path);
 
-			await drive.copy("/sub/deep/deep.doc", "/sub/deep.doc");
+			await drive.copy("/sub/deep/deep.doc", "/sub");
 			const check2 = await drive.exists(path2);
 			expect(check2).to.eq(true);
 			await drive.remove(path2);
-		});
+
+			await drive.copy("/sub/deep/deep.doc", "/sub/");
+			const check3 = await drive.exists(path2);
+			expect(check3).to.eq(true);
+			await drive.remove(path2);
+
+		}).timeout(6000);
 
 		it("Can copy and rename a file (if exists)", async () => {
-			await drive.copy("/c.jpg", "/sub/c.jpg", { preventNameCollision:true });
+			await drive.copy("/c.jpg", "/sub", { preventNameCollision:true });
 			const check = await drive.exists("/sub/c(1).jpg");
 			expect(check).to.eq(true);
 			await drive.remove("/sub/c(1).jpg");
 		});
 
-	// 	it("Can copy a folder", async () => {
-	// 		const path = __dirname+"/../test/sandbox/sub2";
+		it("Can copy a folder", async () => {
+			await drive.copy("/sub", "/sub2");
+			const list1 = await drive.list("/sub", { subFolders: true });
+			const list2 = await drive.list("/sub2", { subFolders: true });
+			expect(cleanDates(list1)).to.deep.eq(cleanDates(list2));
 
-	// 		await drive.copy("/sub", "/sub2");
-	// 		const list1 = await drive.list("/sub", { subFolders: true });
-	// 		const list2 = await drive.list("/sub2", { subFolders: true });
-	// 		expect(cleanDates(list1)).to.deep.eq(cleanDates(list2));
+			await drive.copy("/sub", "/sub2/");
+			const list3 = await drive.list("/sub2/sub", { subFolders: true });
+			expect(cleanDates(list1)).to.deep.eq(cleanDates(list3));
 
-	// 		await drive.copy("/sub", "/sub2/");
-	// 		const list3 = await drive.list("/sub2/sub", { subFolders: true });
-	// 		expect(cleanDates(list1)).to.deep.eq(cleanDates(list3));
-
-	// 		await fs.remove(path);
-	// 	});
-
-	// 	it("Can copy and rename a folder (if exists)", async () => {
-	// 		await drive.mkdir("/test.folder");
-	// 		await drive.mkdir("/sub/test.folder");
-
-	// 		await drive.copy("/test.folder", "/sub", {preventNameCollision:true});
-	// 		const path = __dirname+"/../test/sandbox/sub/test.folder(1)";
-
-	// 		const check = await fs.pathExists(path);
-	// 		expect(check).to.eq(true);
-
-	// 		await fs.remove(__dirname+"/../test/sandbox/test.folder");
-	// 		await fs.remove(__dirname+"/../test/sandbox/sub/test.folder");
-	// 		await fs.remove(path);
-	// 	});
+			drive.remove("/sub2");
+		}).timeout(10000);
 	});
 
-	// describe("move", () => {
-	// 	it("Can move a file", async () => {
-	// 		const path1 = __dirname+"/../test/sandbox/sub/deep/deep.doc";
-	// 		const path2 = __dirname+"/../test/sandbox/sub/deep/copy.doc";
+	describe("move", () => {
+		it("Can move a file", async () => {
+			await drive.move("/sub/deep/deep.doc", "/sub/deep/copy.doc");
+			const check1 = await drive.exists("/sub/deep/deep.doc");
+			const check2 = await drive.exists("/sub/deep/copy.doc");
+			expect(check1).to.eq(false);
+			expect(check2).to.eq(true);
+			await drive.move("/sub/deep/copy.doc", "/sub/deep/deep.doc");
+		}).timeout(10000);
 
-	// 		await drive.move("/sub/deep/deep.doc", "/sub/deep/copy.doc");
-	// 		const check1 = await fs.pathExists(path1);
-	// 		const check2 = await fs.pathExists(path2);
-	// 		expect(check1).to.eq(false);
-	// 		expect(check2).to.eq(true);
-	// 		await fs.move(path2, path1);
-	// 	});
+		it("Can move and rename a file (if exists)", async () => {
+			await drive.move("/c.jpg", "/sub", {preventNameCollision:true});
+			const check1 = await drive.exists("/c.jpg");
+			const check2 = await drive.exists("/sub/c(1).jpg");
+			expect(check1).to.eq(false);
+			expect(check2).to.eq(true);
+			await drive.move("/sub/c(1).jpg", "/c.jpg");
+		}).timeout(10000);
 
-	// 	it("Can move and rename a file (if exists)", async () => {
-	// 		const path1 = __dirname+"/../test/sandbox/c.jpg";
-	// 		const path2 = __dirname+"/../test/sandbox/sub/c(1).jpg";
+		it("Can move a folder", async () => {
+			await drive.copy("/sub", "/sub3");
+			await drive.move("/sub3", "/sub2");
+			const list1 = await drive.list("/sub", { subFolders: true });
+			const list2 = await drive.list("/sub2", { subFolders: true });
+			expect(cleanDates(list1)).to.deep.eq(cleanDates(list2));
+			const check1 = await drive.exists("/sub3");
+			expect(check1).to.eq(false);
 
-	// 		await drive.move("/c.jpg", "/sub", {preventNameCollision:true});
-	// 		const check1 = await fs.pathExists(path1);
-	// 		const check2 = await fs.pathExists(path2);
-	// 		expect(check1).to.eq(false);
-	// 		expect(check2).to.eq(true);
-	// 		await fs.move(path2, path1);
-	// 	});
+			await drive.move("/sub2", "/sub/deep");
+			const list3 = await drive.list("/sub/deep/sub2", { subFolders: true });
+			expect(cleanDates(list1)).to.deep.eq(cleanDates(list3));
+			const check2 = await drive.exists("/sub2");
+			expect(check2).to.eq(false);
 
-	// 	it("Can move a folder", async () => {
-	// 		const path1 = __dirname+"/../test/sandbox/sub3";
-	// 		const path2 = __dirname+"/../test/sandbox/sub2";
-	// 		const path3 = __dirname+"/../test/sandbox/sub/deep/sub2";
-
-	// 		await drive.copy("/sub", "/sub3");
-	// 		await drive.move("/sub3", "/sub2");
-	// 		const list1 = await drive.list("/sub", { subFolders: true });
-	// 		const list2 = await drive.list("/sub2", { subFolders: true });
-	// 		expect(cleanDates(list1)).to.deep.eq(cleanDates(list2));
-	// 		const check1 = await fs.pathExists(path1);
-	// 		expect(check1).to.eq(false);
-
-	// 		await drive.move("/sub2", "/sub/deep");
-	// 		const list3 = await drive.list("/sub/deep/sub2", { subFolders: true });
-	// 		expect(cleanDates(list1)).to.deep.eq(cleanDates(list3));
-	// 		const check2 = await fs.pathExists(path2);
-	// 		expect(check2).to.eq(false);
-
-	// 		await fs.remove(path3);
-	// 	});
-
-	// 	it("Can move and rename a folder (if exists)", async () => {
-	// 		const path1 = __dirname+"/../test/sandbox/test.folder";
-	// 		const path2 = __dirname+"/../test/sandbox/sub/test.folder";
-	// 		const path3 = __dirname+"/../test/sandbox/sub/test.folder(1)";
-
-	// 		await drive.mkdir("/test.folder");
-	// 		await drive.mkdir("/sub/test.folder");
-
-	// 		await drive.move("/test.folder", "/sub", {preventNameCollision:true});
-	// 		const check1 = await fs.pathExists(path1);
-	// 		const check2 = await fs.pathExists(path2);
-	// 		expect(check1).to.eq(false);
-	// 		expect(check2).to.eq(true);
-
-	// 		await fs.remove(path2);
-	// 		await fs.remove(path3);
-	// 	});
-	// });
+			await drive.remove("/sub/deep/sub2");
+		}).timeout(10000);
+	});
 
 	describe("write and remove", () => {
 		it("Can write a file", async () => {

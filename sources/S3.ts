@@ -5,7 +5,6 @@ import * as stream from "stream";
 import getFileType from "./filetypes";
 import {CombinedPolicy, ForceRootPolicy} from "./policy";
 import {IDriveConfig, IFsObject, IListConfig, IOperationConfig, IPolicy, Operation} from "./types";
-import { ConfigurationServicePlaceholders } from "aws-sdk/lib/config_service_placeholders";
 
 const fs:any = {};
 
@@ -36,8 +35,9 @@ export default class S3 {
 		}
 		// /root/some/../../other => /root/other
 		root = filepath.normalize(root);
-		if (root === ".")
+		if (root === "."){
 			root = "/";
+		}
 
 		this._root = root;
 
@@ -76,13 +76,46 @@ export default class S3 {
 
 		const fullpath = this.idToPath(path);
 		if (this.policy.comply(fullpath, Operation.Write)) {
-			return this.aws.deleteObject({
-				Bucket: this._bucket,
-				Key: fullpath.substr(1)
-			}).promise();
+			const files = await this._files(path);
+
+			let result;
+			if (files.length){
+				result = await this.aws.deleteObjects({
+					Bucket: this._bucket,
+					Delete:{
+						Objects : files.map(a => ({ Key: a }))
+					}
+				}).promise();
+			} else {
+				result = await this.aws.deleteObject({
+					Bucket: this._bucket,
+					Key: fullpath.substr(1)
+				}).promise();
+			}
+
+			return result;
 		}
 
 		throw new Error("Access Denied");
+	}
+
+	async _files(path: string, count?: number) : Promise<string[]> {
+		if (path[path.length-1] !== "/"){
+			path = path + "/";
+		}
+
+		const search:any = {
+			Bucket : this._bucket,
+			Prefix : path.substr(1)
+		};
+		if (count){
+			search.MaxKeys = count;
+		}
+
+		const data = await this.aws.listObjectsV2(search).promise();
+
+		const keys = data.Contents.map(a => a.Key);
+		return keys;
 	}
 
 	async read(path: string): Promise<any> {
@@ -118,7 +151,6 @@ export default class S3 {
 				Key: fullpath.substr(1),
 				Body: data
 			}).promise();
-			
 
 			return Promise.resolve(this.pathToId(fullpath));
 		}
@@ -155,8 +187,27 @@ export default class S3 {
 		return obj;
 	}
 
-	async mkdir(path: string, _config?: IOperationConfig) : Promise<string> {
-		return Promise.resolve(path);
+	async mkdir(path: string, config?: IOperationConfig) : Promise<string> {
+		if (this._config.verbose){
+			console.log("Make folder %s", path);
+		}
+
+		let fullpath = this.idToPath(path);
+		if (!this.policy.comply(fullpath, Operation.Write)) {
+			throw new Error("Access Denied");
+		}
+
+		if(config && config.preventNameCollision){
+			fullpath = await this.checkName(fullpath, "folder");
+		}
+
+		await this.aws.upload({
+			Bucket: this._bucket,
+			Key: filepath.join(fullpath, ".wfs_placeholder").substr(1),
+			Body: ""
+		}).promise();
+
+		return this.pathToId(fullpath);
 	}
 
 	async copy(sourceId: string, targetId: string, config?: IOperationConfig): Promise<string> {
@@ -171,16 +222,39 @@ export default class S3 {
 			throw new Error("Access Denied");
 		}
 
-		if(config && config.preventNameCollision){
-			target = await this.checkName(target, "file");
-		}
+		let tfiles = await this._files(target, 1);
+		let sfiles = await this._files(source);
 
-		// file to file
-		await this.aws.copyObject({
-			Bucket: this._bucket,
-			Key: target.substr(1),
-			CopySource: this._bucket + "/" + source.substr(1)
-		}).promise();
+		if (!sfiles.length){
+			if (!tfiles.length){
+				// copy a file to file
+			} else {
+				// copy a file to folder
+				target = filepath.join(target, filepath.basename(source))
+			}
+			if(config && config.preventNameCollision){
+				target = await this.checkName(target, "file");
+			}
+
+			await this.aws.copyObject({
+				Bucket: this._bucket,
+				Key: target.substr(1),
+				CopySource: this._bucket + "/" + source.substr(1)
+			}).promise();	
+	 	} else {
+			tfiles = sfiles
+				.map(a => filepath.join(target, filepath.basename(source), filepath.basename(a)));
+
+			for(let i=0; i<tfiles.length; i++){
+				if (sfiles[i] === source.substr(1)) continue;
+
+				await this.aws.copyObject({
+					Bucket: this._bucket,
+					Key: tfiles[i].substr(1),
+					CopySource: this._bucket + "/" + sfiles[i]
+				}).promise();		
+			}
+		}
 
 		return this.pathToId(target);
 	}
@@ -192,6 +266,10 @@ export default class S3 {
 				await this.info(source);
 				return Promise.resolve(true);
 			} catch(e){
+				const files = await this._files(source, 1);
+				if (files.length){
+					return true;
+				}
 				return Promise.resolve(false);
 			}
 		}
