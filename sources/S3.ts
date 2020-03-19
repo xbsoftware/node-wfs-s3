@@ -69,6 +69,10 @@ export default class S3 {
 		throw new Error("Access Denied");
 	}
 
+	async search(path: string, search: string, config?: IListConfig){
+		return this.list(path, config)
+	}
+
 	async remove(path: string): Promise<void>{
 		if (this._config.verbose){
 			console.log("Delete %s", path);
@@ -141,11 +145,6 @@ export default class S3 {
 
 		let fullpath = this.idToPath(path);
 		if (this.policy.comply(fullpath, Operation.Write)) {
-			if(config && config.preventNameCollision){
-				fullpath = await this.checkName(fullpath, "file");
-			}
-
-			const writeStream = new stream.PassThrough();
 			await this.aws.upload({
 				Bucket: this._bucket,
 				Key: fullpath.substr(1),
@@ -163,6 +162,7 @@ export default class S3 {
 			throw new Error("Access Denied");
 		}
 
+		const name = filepath.basename(fullpath);
 		let content;
 		try {
 			content = await this.aws.headObject({
@@ -170,11 +170,17 @@ export default class S3 {
 				Key: fullpath.substr(1)
 			}).promise();
 		} catch(e){
-			return Promise.reject(e);
+			// we can't get info about dirs in case of aws
+			const info = await this.info(filepath.join(id, ".wfs_placeholder"))
+			return {
+				id,
+				value:name,
+				size:0,
+				date: info.date,
+				type:"folder"
+			}
 		}
 
-
-		const name = filepath.basename(fullpath);
 		const type = content.ContentType === "application/x-directory" ? "folder" : getFileType(name);
 		const obj : IFsObject = {
 			id,
@@ -187,9 +193,13 @@ export default class S3 {
 		return obj;
 	}
 
-	async mkdir(path: string, config?: IOperationConfig) : Promise<string> {
+	async stats(path:string){
+		return { free:0, used:0 };
+	}
+
+	async make(path: string, name: string, isFolder: boolean, config?: IOperationConfig) : Promise<string> {
 		if (this._config.verbose){
-			console.log("Make folder %s", path);
+			console.log("Make entity %s %s", path, name);
 		}
 
 		let fullpath = this.idToPath(path);
@@ -198,21 +208,27 @@ export default class S3 {
 		}
 
 		if(config && config.preventNameCollision){
-			fullpath = await this.checkName(fullpath, "folder");
+			name = await this.checkName(fullpath, name, isFolder);
+		}
+
+		fullpath = filepath.join(fullpath, name)
+		let truepath = fullpath;
+		if (isFolder){
+			truepath = filepath.join(truepath, ".wfs_placeholder")
 		}
 
 		await this.aws.upload({
 			Bucket: this._bucket,
-			Key: filepath.join(fullpath, ".wfs_placeholder").substr(1),
+			Key: truepath.substr(1),
 			Body: ""
 		}).promise();
 
 		return this.pathToId(fullpath);
 	}
 
-	async copy(sourceId: string, targetId: string, config?: IOperationConfig): Promise<string> {
+	async copy(sourceId: string, targetId: string, name: string, config?: IOperationConfig): Promise<string> {
 		if (this._config.verbose){
-			console.log("Copy %s to %s", sourceId, targetId);
+			console.log("Copy %s to %s as %s", sourceId, targetId, name);
 		}
 
 		const source = this.idToPath(sourceId);
@@ -222,29 +238,22 @@ export default class S3 {
 			throw new Error("Access Denied");
 		}
 
-		let tfiles = await this._files(target, 1);
+		if (!name) name = filepath.basename(source);
+		if(config && config.preventNameCollision){
+			name = await this.checkName(target, name, false);
+		}
+		target = filepath.join(target, name);
+
 		let sfiles = await this._files(source);
-
 		if (!sfiles.length){
-			if (!tfiles.length){
-				// copy a file to file
-			} else {
-				// copy a file to folder
-				target = filepath.join(target, filepath.basename(source))
-			}
-			if(config && config.preventNameCollision){
-				target = await this.checkName(target, "file");
-			}
-
 			await this.aws.copyObject({
 				Bucket: this._bucket,
 				Key: target.substr(1),
 				CopySource: this._bucket + "/" + source.substr(1)
 			}).promise();	
 	 	} else {
-			tfiles = sfiles
-				.map(a => filepath.join(target, filepath.basename(source), filepath.basename(a)));
-
+			let tfiles = sfiles
+				.map(a => filepath.join(target, filepath.basename(a)));
 			for(let i=0; i<tfiles.length; i++){
 				if (sfiles[i] === source.substr(1)) continue;
 
@@ -277,12 +286,12 @@ export default class S3 {
 		throw new Error("Access Denied");
 	}
 
-	async move(source: string, target: string, config?: IOperationConfig): Promise<string> {
+	async move(source: string, target: string, name: string, config?: IOperationConfig): Promise<string> {
 		if (this._config.verbose){
 			console.log("Move %s to %s", source, target);
 		}
 
-		await this.copy(source, target, config);
+		target = await this.copy(source, target, name, config);
 		await this.remove(source);
 
 		return target;
@@ -400,9 +409,9 @@ export default class S3 {
 		return res;
 	}
 
-	private getNewName(name: string, counter: number, type: string) : string {
+	private getNewName(name: string, counter: number, isFolder: boolean) : string {
 		// filepath.extname grabs the characters after the last dot (app.css.gz return .gz, not .css.gz)
-		const ext = type === "file" ? name.substring(name.indexOf(".")) : "";
+		const ext = !isFolder ? name.substring(name.indexOf(".")) : "";
 		name = filepath.basename(name, ext);
 
 		const match = name.match(/\(([0-9]*)\)$/);
@@ -414,18 +423,15 @@ export default class S3 {
 		return name + "("+counter+")" + ext;
 	}
 
-	private async checkName(path: string, type: string) : Promise<string> {
-		const folder = filepath.dirname(path);
-		let name = filepath.basename(path);
-
+	private async checkName(folder: string, name: string, isFolder: boolean) : Promise<string> {
 		const files = await this.list(folder);
 
 		let counter = 1;
 
 		while (files.filter(a => a.value === name).length !== 0){
-			name = this.getNewName(name, counter++, type);
+			name = this.getNewName(name, counter++, isFolder);
 		}
 
-		return filepath.join(folder, name);
+		return name;
 	}
 }

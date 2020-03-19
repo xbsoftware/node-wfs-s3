@@ -1,6 +1,6 @@
 {
   "name": "wfs-s3",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Minimal subset of file operations for remote services",
   "main": "lib/entry.js",
   "types": "lib/entry.d.ts",
@@ -26,7 +26,7 @@
   "devDependencies": {
     "@types/chai": "^4.1.7",
     "@types/mocha": "^5.2.5",
-    "@types/node": "^10.12.15",
+    "@types/node": "^13.9.1",
     "chai": "^4.2.0",
     "mocha": "^5.2.0",
     "ts-node": "^7.0.1",
